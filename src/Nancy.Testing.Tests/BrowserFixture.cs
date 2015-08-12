@@ -17,14 +17,16 @@ namespace Nancy.Testing.Tests
     using Nancy.Authentication.Forms;
 
     using Xunit.Extensions;
+    using System.IO.Compression;
 
     public class BrowserFixture
     {
         private readonly Browser browser;
+        private readonly ConfigurableBootstrapper bootstrapper;
 
         public BrowserFixture()
         {
-            var bootstrapper =
+            bootstrapper =
                 new ConfigurableBootstrapper(config => config.Modules(typeof(EchoModule)));
 
             CookieBasedSessions.Enable(bootstrapper);
@@ -505,6 +507,43 @@ namespace Nancy.Testing.Tests
             result.Body.AsString().ShouldEqual("john++");
         }
 
+        [Fact]
+        public void Should_support_gzipped_response()
+        {
+            // Given
+            bootstrapper.AfterRequest.AddItemToEndOfPipeline(ctx =>
+               {
+                   ctx.Response.Headers["Content-Encoding"] = "gzip";
+                   var contents = ctx.Response.Contents;
+                   ctx.Response.Contents = responseStream =>
+                   {
+                       using (var gzip = new GZipStream(responseStream, CompressionMode.Compress))
+                       {
+                           contents.Invoke(gzip);
+                       }
+
+                   };
+               });
+
+            // When
+            var result = browser.Get("/");
+
+            // Then
+            using (var responseStream = new MemoryStream())
+            {
+                var responseBytes = result.Body.ToArray();
+                responseStream.Write(responseBytes, 0, responseBytes.Length);
+
+                using (var zipStream = new GZipStream(responseStream, CompressionMode.Decompress))
+                {
+                    using (var zipStreamReader = new StreamReader(zipStream))
+                    {
+                        zipStreamReader.ReadToEnd().ShouldEqual("Hello World");
+                    }
+                }
+            }
+        }
+
         public class EchoModel
         {
             public string SomeString { get; set; }
@@ -516,6 +555,10 @@ namespace Nancy.Testing.Tests
         {
             public EchoModule()
             {
+                Get["/"] = ctx =>
+                    {
+                        return "Hello World";
+                    };
 
                 Post["/"] = ctx =>
                     {
